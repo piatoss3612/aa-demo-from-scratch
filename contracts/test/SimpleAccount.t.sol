@@ -190,10 +190,10 @@ contract SimpleAccountTest is Test {
         uint256 simpleAccountBalanceBefore = address(simpleAccount).balance;
         uint256 beneficiaryBalanceBefore = beneficiary.balance;
 
-        vm.pauseGasMetering(); // EvmError: OutOfGas occurs without this
-
         vm.expectEmit(true, true, true, false);
         emit UserOperationEvent(userOpHash, address(simpleAccount), address(0), nonce, true, 0, 0);
+
+        vm.pauseGasMetering(); // EvmError: OutOfGas occurs without this
 
         vm.prank(beneficiary);
         entryPoint.handleOps(ops, payable(beneficiary));
