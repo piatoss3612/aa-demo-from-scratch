@@ -89,6 +89,10 @@ contract SimpleAccount is BaseAccount, TokenCallbackHandler, UUPSUpgradeable, In
         | SimpleAccount |
         =================
     */
+    function version() external pure virtual returns (string memory) {
+        return "1.0.0";
+    }
+
     function execute(address target, uint256 value, bytes memory data) external {
         _onlyFromEntryPointOrOwner();
         _call(target, value, data);

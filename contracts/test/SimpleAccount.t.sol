@@ -3,13 +3,14 @@ pragma solidity ^0.8.24;
 
 import {Test, console} from "forge-std/Test.sol";
 import {SimpleAccount} from "../src/SimpleAccount.sol";
+import {SimpleAccountV2} from "../src/SimpleAccountV2.sol";
 import {IEntryPoint} from "account-abstraction/interfaces/IEntryPoint.sol";
+import {EntryPoint} from "account-abstraction/core/EntryPoint.sol";
 import {PackedUserOperation} from "account-abstraction/interfaces/PackedUserOperation.sol";
 import {ERC1967Proxy} from "@openzeppelin/contracts/proxy/ERC1967/ERC1967Proxy.sol";
 import {Counter} from "../src/Counter.sol";
 import {MessageHashUtils} from "@openzeppelin/contracts/utils/cryptography/MessageHashUtils.sol";
 import {UserOpUtils} from "./UserOpUtils.sol";
-import {EntryPoint} from "../src/EntryPoint.sol";
 import {UserOperationLib} from "account-abstraction/core/UserOperationLib.sol";
 
 contract SimpleAccountTest is Test {
@@ -20,6 +21,7 @@ contract SimpleAccountTest is Test {
 
     EntryPoint public entryPoint;
     SimpleAccount public simpleAccountImpl;
+    SimpleAccountV2 public simpleAccountV2Impl;
     Counter public counter;
     UserOpUtils public utils;
 
@@ -56,6 +58,9 @@ contract SimpleAccountTest is Test {
 
         simpleAccountImpl = new SimpleAccount(entryPoint);
         vm.label(address(simpleAccountImpl), "SimpleAccountImpl");
+
+        simpleAccountV2Impl = new SimpleAccountV2(entryPoint);
+        vm.label(address(simpleAccountV2Impl), "SimpleAccountV2Impl");
 
         counter = new Counter();
         vm.label(address(counter), "Counter");
@@ -251,6 +256,24 @@ contract SimpleAccountTest is Test {
         assertEq(counter.number(), counterBefore + 5);
         assertLt(address(simpleAccount).balance, simpleAccountBalanceBefore);
         assertGt(beneficiary.balance, beneficiaryBalanceBefore);
+    }
+
+    function test_Upgrade() public {
+        SimpleAccount simpleAccount = createAccount();
+
+        string memory version = simpleAccount.version();
+
+        assertEq(version, "1.0.0");
+
+        bytes memory data = abi.encodeWithSignature("upgradeToAndCall(address,bytes)", address(simpleAccountV2Impl), "");
+
+        vm.prank(owner);
+        (bool ok,) = address(simpleAccount).call(data);
+        assertTrue(ok);
+
+        version = simpleAccount.version();
+
+        assertEq(version, "2.0.0");
     }
 
     function createAccount() public returns (SimpleAccount) {

@@ -4,7 +4,7 @@
 
 - 합의 계층 프로토콜을 변경하지 않고도 계정 추상화를 가능케 하는 제안
 - 새로운 프로토콜 기능 또는 새로운 트랜잭션 유형을 도입하는 대신, `UserOperation`이라는 상위 계층 수도-트랜잭션 객체(higher-layer pseudo-transaction object)를 도입
-- 사용자는 `UserOperation`을 생성하고 이를 위한 전용 멤풀에 전송
+- 사용자는 `UserOperation`을 생성하고 전용 멤풀에 전송
 - `번들러(bundler)`라는 특별한 종류의 행위자는 사용자 작업 전용 멤풀에서 작업을 수집하고, 패키지화하여 특정 컨트랙트의 `handleOps` 함수를 호출
 - 패키지화된 `UserOperation`들은 하나의 트랜잭션으로 처리되어 블록에 포함
 
