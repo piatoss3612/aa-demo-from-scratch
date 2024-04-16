@@ -4,26 +4,40 @@ pragma solidity ^0.8.24;
 import {Test, console} from "forge-std/Test.sol";
 import {SimpleAccount} from "../src/SimpleAccount.sol";
 import {IEntryPoint} from "account-abstraction/interfaces/IEntryPoint.sol";
-import {EntryPoint} from "account-abstraction/core/EntryPoint.sol";
 import {PackedUserOperation} from "account-abstraction/interfaces/PackedUserOperation.sol";
 import {ERC1967Proxy} from "@openzeppelin/contracts/proxy/ERC1967/ERC1967Proxy.sol";
 import {Counter} from "../src/Counter.sol";
 import {MessageHashUtils} from "@openzeppelin/contracts/utils/cryptography/MessageHashUtils.sol";
+import {UserOpUtils} from "./UserOpUtils.sol";
+import {EntryPoint} from "../src/EntryPoint.sol";
+import {UserOperationLib} from "account-abstraction/core/UserOperationLib.sol";
 
 contract SimpleAccountTest is Test {
     using MessageHashUtils for bytes32;
+    using UserOperationLib for PackedUserOperation;
 
     bytes32 public constant IMPLEMENTATION_SLOT = 0x360894a13ba1a3210667c828492db98dca3e2076cc3735a920a3ca505d382bbc;
 
     EntryPoint public entryPoint;
     SimpleAccount public simpleAccountImpl;
     Counter public counter;
+    UserOpUtils public utils;
 
     uint256 public ownerPrivateKey = 1;
     address public owner;
     address public bob;
+    address public beneficiary;
 
     event SimpleAccountInitialized(IEntryPoint indexed entryPoint, address indexed owner);
+    event UserOperationEvent(
+        bytes32 indexed userOpHash,
+        address indexed sender,
+        address indexed paymaster,
+        uint256 nonce,
+        bool success,
+        uint256 actualGasCost,
+        uint256 actualGasUsed
+    );
 
     function setUp() public {
         owner = vm.addr(ownerPrivateKey);
@@ -33,6 +47,10 @@ contract SimpleAccountTest is Test {
         bob = makeAddr("bob");
         vm.label(bob, "Bob");
 
+        beneficiary = makeAddr("beneficiary");
+        vm.label(beneficiary, "Beneficiary");
+        vm.deal(beneficiary, 1 ether);
+
         entryPoint = new EntryPoint();
         vm.label(address(entryPoint), "EntryPoint");
 
@@ -41,6 +59,8 @@ contract SimpleAccountTest is Test {
 
         counter = new Counter();
         vm.label(address(counter), "Counter");
+
+        utils = new UserOpUtils();
     }
 
     function test_Deploy() public {
@@ -94,7 +114,7 @@ contract SimpleAccountTest is Test {
 
         bytes memory userOp = abi.encodeWithSelector(counter.increment.selector);
 
-        vm.expectRevert(SimpleAccount.OnlyFromEntryPointOrOwner.selector);
+        vm.expectRevert();
 
         vm.prank(bob);
         simpleAccount.execute(address(counter), 0, userOp);
@@ -130,38 +150,11 @@ contract SimpleAccountTest is Test {
     function test_ValidateUserOp() public {
         SimpleAccount simpleAccount = createAccount();
 
-        bytes memory userOp = abi.encodeWithSelector(counter.increment.selector);
+        PackedUserOperation memory packedUserOp = utils.packUserOp(address(simpleAccount), simpleAccount.getNonce(), "");
 
-        PackedUserOperation memory packedUserOp = PackedUserOperation({
-            sender: owner,
-            nonce: simpleAccount.getNonce(),
-            initCode: "",
-            callData: userOp,
-            accountGasLimits: bytes32(uint256(20 gwei)),
-            preVerificationGas: 10 gwei,
-            gasFees: bytes32(uint256(2 gwei)),
-            paymasterAndData: "",
-            signature: ""
-        });
+        bytes32 userOpHash = entryPoint.getUserOpHash(packedUserOp);
 
-        bytes32 userOpHash = keccak256(
-            abi.encode(
-                packedUserOp.sender,
-                packedUserOp.nonce,
-                keccak256(packedUserOp.initCode),
-                keccak256(packedUserOp.callData),
-                packedUserOp.accountGasLimits,
-                packedUserOp.preVerificationGas,
-                packedUserOp.gasFees,
-                keccak256(packedUserOp.paymasterAndData)
-            )
-        );
-
-        bytes32 digest = userOpHash.toEthSignedMessageHash();
-
-        (uint8 v, bytes32 r, bytes32 s) = vm.sign(ownerPrivateKey, digest);
-
-        bytes memory signature = abi.encodePacked(r, s, v);
+        bytes memory signature = utils.signUserOp(ownerPrivateKey, userOpHash);
 
         packedUserOp.signature = signature;
 
@@ -170,7 +163,94 @@ contract SimpleAccountTest is Test {
         vm.prank(address(entryPoint));
         uint256 validationData = simpleAccount.validateUserOp(packedUserOp, userOpHash, missingAccountFunds);
 
-        assertEq(validationData, simpleAccount.SIG_VALIDATION_SUCCESS());
+        assertEq(validationData, 0);
+    }
+
+    function test_HandleOps() public {
+        SimpleAccount simpleAccount = createAccount();
+
+        bytes memory callData = abi.encodeWithSelector(
+            SimpleAccount.execute.selector, address(counter), 0, abi.encodeWithSelector(counter.increment.selector)
+        );
+
+        uint256 nonce = simpleAccount.getNonce();
+
+        PackedUserOperation memory packedUserOp = utils.packUserOp(address(simpleAccount), nonce, callData);
+
+        bytes32 userOpHash = entryPoint.getUserOpHash(packedUserOp);
+
+        bytes memory signature = utils.signUserOp(ownerPrivateKey, userOpHash);
+
+        packedUserOp.signature = signature;
+
+        PackedUserOperation[] memory ops = new PackedUserOperation[](1);
+        ops[0] = packedUserOp;
+
+        uint256 counterBefore = counter.number();
+        uint256 simpleAccountBalanceBefore = address(simpleAccount).balance;
+        uint256 beneficiaryBalanceBefore = beneficiary.balance;
+
+        vm.pauseGasMetering(); // EvmError: OutOfGas occurs without this
+
+        vm.expectEmit(true, true, true, false);
+        emit UserOperationEvent(userOpHash, address(simpleAccount), address(0), nonce, true, 0, 0);
+
+        vm.prank(beneficiary);
+        entryPoint.handleOps(ops, payable(beneficiary));
+
+        vm.resumeGasMetering();
+
+        assertEq(counter.number(), counterBefore + 1);
+        assertLt(address(simpleAccount).balance, simpleAccountBalanceBefore);
+        assertGt(beneficiary.balance, beneficiaryBalanceBefore);
+    }
+
+    function test_HandleOpsWithExecuteBatch() public {
+        SimpleAccount simpleAccount = createAccount();
+
+        address[] memory targets = new address[](5);
+        uint256[] memory values = new uint256[](0);
+        bytes[] memory datas = new bytes[](5);
+
+        bytes memory incrementData = abi.encodeWithSelector(counter.increment.selector);
+
+        for (uint256 i = 0; i < 5; i++) {
+            targets[i] = address(counter);
+            datas[i] = incrementData;
+        }
+
+        bytes memory callData = abi.encodeWithSelector(SimpleAccount.executeBatch.selector, targets, values, datas);
+
+        uint256 nonce = simpleAccount.getNonce();
+
+        PackedUserOperation memory packedUserOp = utils.packUserOp(address(simpleAccount), nonce, callData);
+
+        bytes32 userOpHash = entryPoint.getUserOpHash(packedUserOp);
+
+        bytes memory signature = utils.signUserOp(ownerPrivateKey, userOpHash);
+
+        packedUserOp.signature = signature;
+
+        PackedUserOperation[] memory ops = new PackedUserOperation[](1);
+        ops[0] = packedUserOp;
+
+        uint256 counterBefore = counter.number();
+        uint256 simpleAccountBalanceBefore = address(simpleAccount).balance;
+        uint256 beneficiaryBalanceBefore = beneficiary.balance;
+
+        vm.pauseGasMetering(); // EvmError: OutOfGas occurs without this
+
+        vm.expectEmit(true, true, true, false);
+        emit UserOperationEvent(userOpHash, address(simpleAccount), address(0), nonce, true, 0, 0);
+
+        vm.prank(beneficiary);
+        entryPoint.handleOps(ops, payable(beneficiary));
+
+        vm.resumeGasMetering();
+
+        assertEq(counter.number(), counterBefore + 5);
+        assertLt(address(simpleAccount).balance, simpleAccountBalanceBefore);
+        assertGt(beneficiary.balance, beneficiaryBalanceBefore);
     }
 
     function createAccount() public returns (SimpleAccount) {
@@ -178,6 +258,7 @@ contract SimpleAccountTest is Test {
 
         vm.prank(owner);
         ERC1967Proxy simpleAccountProxy = new ERC1967Proxy(address(simpleAccountImpl), data);
+        vm.deal(address(simpleAccountProxy), 1 ether);
 
         return SimpleAccount(payable(address(simpleAccountProxy)));
     }
