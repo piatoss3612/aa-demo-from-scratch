@@ -9,14 +9,9 @@ import {EntryPoint} from "account-abstraction/core/EntryPoint.sol";
 import {PackedUserOperation} from "account-abstraction/interfaces/PackedUserOperation.sol";
 import {ERC1967Proxy} from "@openzeppelin/contracts/proxy/ERC1967/ERC1967Proxy.sol";
 import {Counter} from "../src/Counter.sol";
-import {MessageHashUtils} from "@openzeppelin/contracts/utils/cryptography/MessageHashUtils.sol";
 import {UserOpUtils} from "./UserOpUtils.sol";
-import {UserOperationLib} from "account-abstraction/core/UserOperationLib.sol";
 
 contract SimpleAccountTest is Test {
-    using MessageHashUtils for bytes32;
-    using UserOperationLib for PackedUserOperation;
-
     bytes32 public constant IMPLEMENTATION_SLOT = 0x360894a13ba1a3210667c828492db98dca3e2076cc3735a920a3ca505d382bbc;
 
     EntryPoint public entryPoint;
@@ -163,12 +158,15 @@ contract SimpleAccountTest is Test {
 
         packedUserOp.signature = signature;
 
-        uint256 missingAccountFunds = 0;
+        uint256 missingAccountFunds = 10 gwei;
+        uint256 accountBalanceBefore = address(simpleAccount).balance;
 
         vm.prank(address(entryPoint));
         uint256 validationData = simpleAccount.validateUserOp(packedUserOp, userOpHash, missingAccountFunds);
 
         assertEq(validationData, 0);
+        assertEq(address(entryPoint).balance, missingAccountFunds);
+        assertEq(address(simpleAccount).balance, accountBalanceBefore - missingAccountFunds);
     }
 
     function test_HandleOps() public {
@@ -192,7 +190,7 @@ contract SimpleAccountTest is Test {
         ops[0] = packedUserOp;
 
         uint256 counterBefore = counter.number();
-        uint256 simpleAccountBalanceBefore = address(simpleAccount).balance;
+        uint256 accountBalanceBefore = address(simpleAccount).balance;
         uint256 beneficiaryBalanceBefore = beneficiary.balance;
 
         vm.expectEmit(true, true, true, false);
@@ -200,13 +198,12 @@ contract SimpleAccountTest is Test {
 
         vm.pauseGasMetering(); // EvmError: OutOfGas occurs without this
 
-        vm.prank(beneficiary);
         entryPoint.handleOps(ops, payable(beneficiary));
 
         vm.resumeGasMetering();
 
         assertEq(counter.number(), counterBefore + 1);
-        assertLt(address(simpleAccount).balance, simpleAccountBalanceBefore);
+        assertLt(address(simpleAccount).balance, accountBalanceBefore);
         assertGt(beneficiary.balance, beneficiaryBalanceBefore);
     }
 
