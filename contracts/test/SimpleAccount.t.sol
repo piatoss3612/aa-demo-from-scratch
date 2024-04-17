@@ -5,23 +5,23 @@ import {Test, console} from "forge-std/Test.sol";
 import {SimpleAccount} from "../src/SimpleAccount.sol";
 import {SimpleAccountV2} from "../src/SimpleAccountV2.sol";
 import {IEntryPoint} from "account-abstraction/interfaces/IEntryPoint.sol";
-import {EntryPoint} from "account-abstraction/core/EntryPoint.sol";
 import {PackedUserOperation} from "account-abstraction/interfaces/PackedUserOperation.sol";
 import {ERC1967Proxy} from "@openzeppelin/contracts/proxy/ERC1967/ERC1967Proxy.sol";
 import {Counter} from "../src/Counter.sol";
-import {UserOpUtils} from "./UserOpUtils.sol";
+import {UserOpUtils} from "./utils/UserOpUtils.sol";
+import "./utils/Artifacts.sol";
 
 contract SimpleAccountTest is Test {
     bytes32 public constant IMPLEMENTATION_SLOT = 0x360894a13ba1a3210667c828492db98dca3e2076cc3735a920a3ca505d382bbc;
 
-    EntryPoint public entryPoint;
+    IEntryPoint public entryPoint;
     SimpleAccount public simpleAccountImpl;
-    SimpleAccountV2 public simpleAccountV2Impl;
     Counter public counter;
     UserOpUtils public utils;
 
     uint256 public ownerPrivateKey = 1;
     address public owner;
+    address public deployer;
     address public bob;
     address public beneficiary;
 
@@ -44,23 +44,28 @@ contract SimpleAccountTest is Test {
         bob = makeAddr("bob");
         vm.label(bob, "Bob");
 
+        deployer = makeAddr("deployer");
+        vm.label(deployer, "Deployer");
+
         beneficiary = makeAddr("beneficiary");
         vm.label(beneficiary, "Beneficiary");
         vm.deal(beneficiary, 1 ether);
 
-        entryPoint = new EntryPoint();
+        entryPoint = IEntryPoint(payable(ENTRYPOINT_ADDRESS));
+        vm.etch(address(entryPoint), ENTRYPOINT_BYTECODE);
         vm.label(address(entryPoint), "EntryPoint");
 
-        simpleAccountImpl = new SimpleAccount(entryPoint);
+        simpleAccountImpl = SimpleAccount(payable(IMPL_ADDRESS));
+        vm.etch(address(simpleAccountImpl), IMPL_BYTECODE);
         vm.label(address(simpleAccountImpl), "SimpleAccountImpl");
 
-        simpleAccountV2Impl = new SimpleAccountV2(entryPoint);
-        vm.label(address(simpleAccountV2Impl), "SimpleAccountV2Impl");
-
+        vm.startPrank(deployer);
         counter = new Counter();
         vm.label(address(counter), "Counter");
 
         utils = new UserOpUtils();
+        vm.label(address(utils), "UserOpUtils");
+        vm.stopPrank();
     }
 
     function test_Deploy() public {
@@ -196,11 +201,7 @@ contract SimpleAccountTest is Test {
         vm.expectEmit(true, true, true, false);
         emit UserOperationEvent(userOpHash, address(simpleAccount), address(0), nonce, true, 0, 0);
 
-        vm.pauseGasMetering(); // EvmError: OutOfGas occurs without this
-
         entryPoint.handleOps(ops, payable(beneficiary));
-
-        vm.resumeGasMetering();
 
         assertEq(counter.number(), counterBefore + 1);
         assertLt(address(simpleAccount).balance, accountBalanceBefore);
@@ -240,15 +241,11 @@ contract SimpleAccountTest is Test {
         uint256 simpleAccountBalanceBefore = address(simpleAccount).balance;
         uint256 beneficiaryBalanceBefore = beneficiary.balance;
 
-        vm.pauseGasMetering(); // EvmError: OutOfGas occurs without this
-
         vm.expectEmit(true, true, true, false);
         emit UserOperationEvent(userOpHash, address(simpleAccount), address(0), nonce, true, 0, 0);
 
         vm.prank(beneficiary);
         entryPoint.handleOps(ops, payable(beneficiary));
-
-        vm.resumeGasMetering();
 
         assertEq(counter.number(), counterBefore + 5);
         assertLt(address(simpleAccount).balance, simpleAccountBalanceBefore);
@@ -261,6 +258,10 @@ contract SimpleAccountTest is Test {
         string memory version = simpleAccount.version();
 
         assertEq(version, "1.0.0");
+
+        vm.prank(deployer);
+        SimpleAccountV2 simpleAccountV2Impl = new SimpleAccountV2(entryPoint);
+        vm.label(address(simpleAccountV2Impl), "SimpleAccountV2Impl");
 
         bytes memory data = abi.encodeWithSignature("upgradeToAndCall(address,bytes)", address(simpleAccountV2Impl), "");
 
