@@ -2,6 +2,7 @@
 pragma solidity ^0.8.24;
 
 import {PackedUserOperation} from "account-abstraction/interfaces/PackedUserOperation.sol";
+import {UserOperationLib} from "account-abstraction/core/UserOperationLib.sol";
 import {MessageHashUtils} from "@openzeppelin/contracts/utils/cryptography/MessageHashUtils.sol";
 import {Test} from "forge-std/Test.sol";
 
@@ -59,6 +60,15 @@ contract UserOpUtils is Test {
             paymasterAndData: "",
             signature: ""
         });
+    }
+
+    function packPaymasterAndData(address paymaster, uint256 validationGasLimit, uint256 postOpGasLimit)
+        public
+        pure
+        returns (bytes memory paymasterAndData)
+    {
+        paymasterAndData =
+            abi.encodePacked(paymaster, bytes16(uint128(validationGasLimit)), bytes16(uint128(postOpGasLimit)));
     }
 
     // This function is used to hash a user operation.

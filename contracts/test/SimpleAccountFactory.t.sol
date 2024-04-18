@@ -22,12 +22,16 @@ contract SimpleAccountFactoryTest is Test {
 
     uint256 public ownerPrivateKey = uint256(keccak256("owner"));
     address public owner;
+    address public deployer;
     address public beneficiary;
 
     function setUp() public {
         owner = vm.addr(ownerPrivateKey);
         vm.label(owner, "Owner");
         vm.deal(owner, 100 ether);
+
+        deployer = makeAddr("deployer");
+        vm.label(deployer, "Deployer");
 
         beneficiary = makeAddr("beneficiary");
         vm.label(beneficiary, "Beneficiary");
@@ -49,7 +53,7 @@ contract SimpleAccountFactoryTest is Test {
         vm.etch(address(impl), IMPL_BYTECODE);
         vm.label(address(impl), "SimpleAccountImpl");
 
-        vm.startPrank(beneficiary);
+        vm.startPrank(deployer);
         counter = new Counter();
         vm.label(address(counter), "Counter");
 
@@ -102,6 +106,10 @@ contract SimpleAccountFactoryTest is Test {
 
         entryPoint.handleOps(ops, payable(beneficiary));
 
+        SimpleAccount simpleAccount = SimpleAccount(payable(expectedAddr));
+        assertGt(expectedAddr.code.length, 0);
+        assertEq(simpleAccount.owner(), owner);
+        assertEq(address(simpleAccount.entryPoint()), address(entryPoint));
         assertEq(counter.number(), counterBefore + 1);
         assertGt(beneficiary.balance, beneficiaryBalanceBefore);
         assertLt(entryPoint.balanceOf(expectedAddr), depositBefore);

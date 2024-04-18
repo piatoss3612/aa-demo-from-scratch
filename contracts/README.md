@@ -220,6 +220,8 @@ UserOp의 `paymasterAndData` 필드가 비어 있지 않은 경우, `EntryPoint`
    - `actualUserOpFeePerGas`는 실제로 청구된 사용자 수수료를 나타냅니다.
 5. `postOp`로 호출된 `Paymaster`는 사용자의 수수료를 지불하고, `mode`에 따라 다른 작업을 수행합니다.
 
+![Paymaster Flow](https://eips.ethereum.org/assets/eip-4337/bundle-seq-pm.svg)
+
 #### 악의적인 Paymaster 방지책
 
 `Paymaster`는 사용자의 수수료를 지불하는 도우미 컨트랙트이지만, 악의적으로 동작하서 DoS 공격을 수행할 수 있습니다.
