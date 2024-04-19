@@ -6,8 +6,6 @@ import {BasePaymaster} from "account-abstraction/core/BasePaymaster.sol";
 import {PackedUserOperation} from "account-abstraction/interfaces/PackedUserOperation.sol";
 import {UserOperationLib} from "account-abstraction/core/UserOperationLib.sol";
 
-import "forge-std/Test.sol";
-
 contract SimplePaymaster is BasePaymaster {
     error SenderNotWhitelisted(address sender);
     error MaxCostExceeded(uint256 cost);
@@ -84,7 +82,7 @@ contract SimplePaymaster is BasePaymaster {
             revert MaxCostExceeded(maxCost);
         }
 
-        return (abi.encode(sender), SIG_VALIDATION_SUCCESS);
+        return (_encodeContext(sender), SIG_VALIDATION_SUCCESS);
     }
 
     /**

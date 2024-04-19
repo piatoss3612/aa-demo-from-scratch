@@ -8,6 +8,7 @@ import {SenderCreator} from "account-abstraction/core/SenderCreator.sol";
 import {SimpleAccountFactory} from "../src/SimpleAccountFactory.sol";
 import {SimpleAccount} from "../src/SimpleAccount.sol";
 import {SimplePaymaster} from "../src/SimplePaymaster.sol";
+import {LegacyTokenPaymaster} from "account-abstraction/samples/LegacyTokenPaymaster.sol";
 import {PackedUserOperation} from "account-abstraction/interfaces/PackedUserOperation.sol";
 import {Counter} from "../src/Counter.sol";
 import {UserOpUtils} from "./utils/UserOpUtils.sol";
@@ -27,6 +28,7 @@ contract PaymasterTest is Test {
     SimpleAccountFactory public factory;
     SimpleAccount public impl;
     SimplePaymaster public paymaster;
+    LegacyTokenPaymaster public tokenPaymaster;
     Counter public counter;
     UserOpUtils public utils;
 
@@ -68,6 +70,9 @@ contract PaymasterTest is Test {
         paymaster = new SimplePaymaster(entryPoint, INITIAL_MAX_COST);
         vm.label(address(paymaster), "Paymaster");
 
+        tokenPaymaster = new LegacyTokenPaymaster(address(factory), "LTP", entryPoint);
+        vm.label(address(tokenPaymaster), "LegacyTokenPaymaster");
+
         counter = new Counter();
         vm.label(address(counter), "Counter");
 
@@ -75,6 +80,7 @@ contract PaymasterTest is Test {
         vm.label(address(utils), "UserOpUtils");
 
         paymaster.deposit{value: PAYMASTER_DEPOSIT}();
+        tokenPaymaster.deposit{value: PAYMASTER_DEPOSIT}();
 
         vm.stopPrank();
 
@@ -122,6 +128,36 @@ contract PaymasterTest is Test {
         entryPoint.handleOps(ops, payable(beneficiary));
     }
 
+    function test_HandleOpsWithLegacyTokenPayment() public {
+        SimpleAccount account = factory.createAccount(owner, SALT);
+        PackedUserOperation[] memory ops = getrUserOps(address(account), address(tokenPaymaster));
+
+        vm.prank(deployer);
+        tokenPaymaster.mintTokens(address(account), 1 ether);
+
+        assertEq(tokenPaymaster.balanceOf(address(account)), 1 ether);
+
+        uint256 counterBefore = counter.number();
+        uint256 depositBefore = entryPoint.balanceOf(address(tokenPaymaster));
+        uint256 accountTokenBalanceBefore = tokenPaymaster.balanceOf(address(account));
+        uint256 beneficiaryBalanceBefore = beneficiary.balance;
+
+        entryPoint.handleOps(ops, payable(beneficiary));
+
+        assertEq(counter.number(), counterBefore + 1);
+        assertLt(entryPoint.balanceOf(address(tokenPaymaster)), depositBefore);
+        assertLt(tokenPaymaster.balanceOf(address(account)), accountTokenBalanceBefore);
+        assertGt(beneficiary.balance, beneficiaryBalanceBefore);
+    }
+
+    function test_RevertHandleOpsWithInsufficientTokenBalance() public {
+        SimpleAccount account = factory.createAccount(owner, SALT);
+        PackedUserOperation[] memory ops = getrUserOps(address(account), address(tokenPaymaster));
+
+        vm.expectRevert();
+        entryPoint.handleOps(ops, payable(beneficiary));
+    }
+
     function getrUserOps(address accountAddr, address paymasterAddr)
         internal
         view
@@ -135,7 +171,7 @@ contract PaymasterTest is Test {
 
         PackedUserOperation memory packedUserOp = utils.packUserOp(accountAddr, nonce, callData);
 
-        bytes memory paymasterAndData = utils.packPaymasterAndData(address(paymasterAddr), 50000, 50000);
+        bytes memory paymasterAndData = utils.packPaymasterAndData(address(paymasterAddr), 15000, 20000);
 
         packedUserOp.paymasterAndData = paymasterAndData;
 
