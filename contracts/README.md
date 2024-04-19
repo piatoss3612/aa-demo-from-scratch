@@ -243,3 +243,119 @@ function unlockStake() external
 // withdraw the unlocked stake
 function withdrawStake(address payable withdrawAddress) external
 ```
+
+### 서명 집계자 (Signature Aggregator)
+
+서명 집계자는 다음과 같은 인터페이스를 구현해야 합니다:
+
+```solidity
+interface IAggregator {
+
+  function validateUserOpSignature(PackedUserOperation calldata userOp)
+  external view returns (bytes memory sigForUserOp);
+
+  function aggregateSignatures(PackedUserOperation[] calldata userOps) external view returns (bytes memory aggregatesSignature);
+
+  function validateSignatures(PackedUserOperation[] calldata userOps, bytes calldata signature) view external;
+}
+```
+
+- 스마트 계정은 `validateUserOp` 함수의 반환값에 서명 집계자의 주소를 포함함으로써 서명 집계를 지원함을 나타냅니다.
+- `simulationValidation` 함수가 실행되는 동안, 이 서명 집계자(반환된 값)는 `aggregatorInfo` 구조체의 일부로 번들러에게 반환됩니다.
+- 번들러는 최우선 순위로 서명 집계자를 수락해야 합니다. (서명 집계자가 적절한 수준의 보증금을 제공해야 하고, 번들러는 서명 집계자가 throttle 또는 banned 상태가 아닌지 확인해야 합니다.)
+- UserOp를 번들러가 처리하기 전에, 번들러는 `validateUserOpSignature` 함수를 호출하여 UserOp의 서명을 검증해야 합니다. 이 함수는 UserOp의 대체 서명을 반환(보통 빈 값)하며, 번들러는 번들링 중에 이 서명을 사용해야 합니다.
+- 번들러는 위에서 반환된 대체 서명을 사용하여 두 번째로 스마트 계정의 `validateUserOp` 함수를 호출하며, 이전에 반환된 값과 동일한 값이 반환되는지 확인해야 합니다.
+- **aggregateSignatures** 함수는 모든 UserOp 서명을 하나의 값으로 집계해야 합니다.
+- 위의 메서드들은 번들러를 위한 도우미 메서드입니다. 번들러는 동일한 검증 및 집계 로직을 수행하기 위해 네이티브 라이브러리를 사용할 수 있습니다.
+- **validateSignatures** 함수는 배열의 모든 UserOperation에 대한 집계 서명이 일치하는지 검증해야 합니다. 일치하지 않으면 revert해야 합니다. 이 메서드는 on-chain에서 handleOps()에 의해 호출됩니다.
+
+### 시뮬레이션 (Simulation)
+
+#### 시뮬레이션의 필요성에 대한 근거 (Rationale)
+
+UserOperation을 멤풀에 추가하기 위해 (그리고나서 번들에 추가하기 위해) 우리는 오프체인에서 해당 작업이 유효하고, 자체적으로 실행 비용을 지불할 수 있는지 확인해야 합니다. 또한 온체인에서 실행될 때도 동일한 조건이 유지되는지 확인해야 합니다. 이를 위해, UserOperation은 시뮬레이션 단계와 실행 단계 사이에 변경되는 정보(예: 블록 시간, 블록 번호, 블록 해시 등)에는 접근할 수 없어야 합니다. 또한 UserOperation은 sender 주소와 관련된 데이터에만 접근할 수 있어야 하며, 여러 개의 UserOperation이 동일한 스토리지에 접근하지 않도록 해야 합니다. 이렇게 함으로써 하나의 상태 변경으로 많은 UserOperation을 무효화되는 문제를 방지할 수 있습니다. 계정과 상호 작용하는 3개의 특별한 컨트랙트는 다음과 같습니다. 계정을 배포하는 팩토리 (initCode), 가스 비용을 지불할 수 있는 페이마스터, 그리고 서명 집계기; 각 컨트랙트 또한 스토리지 접근이 제한되어, UserOperation 검증이 고립되도록 합니다.
+
+#### 시뮬레이션 사양 (Specification)
+
+`UserOperation`을 시뮬레이션하기 위해, 클라이언트는 `simulateValidation(userop)`을 호출합니다.
+
+EntryPoint 자체는 시뮬레이션 메서드를 구현하지 않았습니다. 대신 시뮬레이션이 필요한 경우, 번들러는 EntryPoint를 시뮬레이션 메소드로 확장하는 EntryPointSimulations 코드를 제공해야 합니다.
+
+시뮬레이션의 핵심 메서드는 다음과 같습니다:
+
+```solidity
+struct ValidationResult {
+    ReturnInfo returnInfo;
+    StakeInfo senderInfo;
+    StakeInfo factoryInfo;
+    StakeInfo paymasterInfo;
+    AggregatorStakeInfo aggregatorInfo;
+}
+
+function simulateValidation(PackedUserOperation calldata userOp)
+external returns (ValidationResult memory);
+
+struct ReturnInfo {
+    uint256 preOpGas;
+    uint256 prefund;
+    uint256 accountValidationData;
+    uint256 paymasterValidationData;
+    bytes paymasterContext;
+}
+
+struct AggregatorStakeInfo {
+    address aggregator;
+    StakeInfo stakeInfo;
+}
+
+struct StakeInfo {
+  uint256 stake;
+  uint256 unstakeDelaySec;
+}
+```
+
+이 메서드는 `ValidationResult`를 반환하거나 유효성 검사 실패 시 revert합니다. 노드는 시뮬레이션이 실패할 경우 UserOperation을 드롭해야 합니다(서명 검증 실패 또는 revert되는 경우).
+
+시뮬레이션된 호출은 다음을 호출하여 전체 검증을 수행합니다:
+
+1. 계정이 존재하지 않는 경우, `initCode`를 사용하여 계정을 생성합니다.
+2. 계정의 `validateUserOp` 함수를 호출합니다.
+3. paymaster가 지정된 경우, paymaster의 `validatePaymasterUserOp` 함수를 호출합니다.
+
+`simulateValidation`은 계정의 `validateUserOp` 및 paymaster의 `validatePaymasterUserOp`에서 반환된 반환 값(validationData)을 검증해야 합니다. 계정에서 반환된 값에는 집계기(aggregator)의 주소가 포함될 수 있습니다. 페이마스터에서는 0 또는 SIG_VALIDATION_FAILED이 반환되어야 하며 주소는 반환되어서는 안됩니다. 반환 값에는 "validAfter" 및 "validUntil" 타임스탬프가 포함될 수 있습니다. 이는 UserOperation이 온체인상에서 유효한 시간 범위를 나타냅니다. 노드는 계정이나 페이마스터에 의해 너무 빠르게 만료(다음 블록 생성에 포함되지 못할 경우)되는 UserOperation을 드롭할 수 있습니다. ValidationResult에 sigFail이 포함되어 있는 경우, 클라이언트는 UserOperation을 드롭해야 합니다.
+
+번들러에 대한 DoS 공격을 방지하기 위해, 그들은 위의 검증 방법이 검증 규칙을 통과하도록 해야 하며, 이는 그들의 opcode 및 스토리지 사용을 제한합니다. 전체 절차는 [ERC-7562](https://eips.ethereum.org/EIPS/eip-7562)를 참조하세요.
+
+### 번들링 (Bundling)
+
+번들링은 노드/번들러가 여러 UserOperation을 수집하고 하나의 트랜잭션을 생성하여 온체인에 제출하는 과정입니다.
+
+번들러는 다음과 같은 규칙을 준수해야 합니다:
+
+- 번들에 포함된 다른 계정(sender)의 주소에 접근하는 UserOperation은 제외해야 합니다.
+- 번들에 포함된 다른 UserOperation에 의해 생성된 주소(예: 팩토리를 통해 생성된 계정의 주소)에 접근하는 UserOperation은 제외해야 합니다.
+- 번들에서 사용된 각 페이마스터의 잔액을 추적하고, 해당 페이마스터를 사용하는 모든 UserOperation에 대해 충분한 예치금이 있는지 확인해야 합니다.
+- UserOperation을 서명 집계자에 따라 정렬하여 각 집계자별 UserOperation 목록(UserOps-per-aggregator)을 생성해야 합니다.
+- 각 집계자별 UserOperation 목록을 사용하여 집계 서명을 생성해야 합니다. 그리고 UserOps를 업데이트해야 합니다.
+
+번들을 생성한 뒤, 트랜잭션을 블록에 포함하기 전에 다음 단계를 수행해야 합니다:
+
+- 가능한 최대 가스량으로 `debug_traceCall`을 실행하여 opcode 및 스토리지 액세스에 대한 검증 규칙을 강제하고, `handleOps` 배치 트랜잭션을 확인하며, 소비된 가스를 측정하여 실제 트랜잭션 실행에 사용해야 합니다.
+- 호출이 revert된 경우, 번들러는 해당 호출이 revert되게 만든 엔티티를 찾기 위해 EntryPoint에 의해 호출된 마지막 엔티티를 식별해야 합니다.
+- 만약 검증 콘텍스트 규칙이 위배되었다면, 번들러는 이를 `UserOperation`이 revert된 것과 동일하게 처리해야 합니다.
+- 문제가 발생한 UserOperation을 번들과 멤풀에서 제거해야 합니다.
+- 오류가 팩토리 또는 페이마스터에 의해 발생했고, UserOp의 sender가 스테이크된 엔티티가 아닌 경우, 해당 팩토리 또는 페이마스터에 대해 "밴" 처리를 해야 합니다.
+- 오류가 팩토리 또는 페이마스터에 의해 발생했고, UserOp의 sender가 스테이크된 엔티티인 경우, 팩토리 또는 페이마스터를 멤풀에서 밴하지 않고, 대신 staked sender 엔티티에 대해 "밴" 처리를 해야 합니다.
+- 이 과정을 반복하여 `debug_traceCall`이 성공할 때까지 계속해야 합니다.
+
+`handleOps`의 검증 전체에 대해 개별 UserOperation과 동일한 opcode 및 프리컴파일 금지 규칙 및 스토리지 액세스 규칙이 강제되어야 합니다. 그렇지 않으면 공격자가 금지된 opcodes를 사용하여 온체인에서 `FailedOp`로 트랜잭션이 revert되도록 유도할 수 있습니다.
+
+### 에러 코드 (Error Codes)
+
+검증을 수행하는 동안, EntryPoint는 실패 시 revert되어야 합니다. 시뮬레이션 중, 호출자(번들러)는 어떤 엔티티(팩토리, 계정 또는 페이마스터)가 실패를 발생시켰는지 결정할 수 있어야 합니다. 이를 위해, EntryPoint에 의해 마지막으로 호출된 엔티티를 식별하는 방법이 필요합니다.
+
+- 오류 진단을 위해 EntryPoint는 명시적인 FailedOp() 또는 FailedOpWithRevert() 오류로만 실패해야 합니다.
+- 오류 메시지는 이벤트 코드, AA##로 시작합니다.
+- “AA1”로 시작하는 이벤트 코드는 계정 생성 중 오류를 나타냅니다.
+- “AA2”로 시작하는 이벤트 코드는 계정 검증(validateUserOp) 중 오류를 나타냅니다.
+- “AA3”로 시작하는 이벤트 코드는 페이마스터 검증(validatePaymasterUserOp) 중 오류를 나타냅니다.
