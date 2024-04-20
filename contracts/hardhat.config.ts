@@ -1,9 +1,18 @@
 import { HardhatUserConfig } from "hardhat/config";
-import "@nomicfoundation/hardhat-toolbox-viem";
+import "@nomiclabs/hardhat-waffle";
+import "@typechain/hardhat";
 import "@nomicfoundation/hardhat-foundry";
 
 const config: HardhatUserConfig = {
-  solidity: "0.8.24",
+  solidity: {
+    version: "0.8.24",
+    settings: {
+      optimizer: {
+        enabled: true,
+        runs: 10000,
+      },
+    },
+  },
 };
 
 export default config;
