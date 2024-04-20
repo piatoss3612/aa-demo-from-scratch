@@ -208,6 +208,42 @@ contract SimpleAccountTest is Test {
         assertGt(beneficiary.balance, beneficiaryBalanceBefore);
     }
 
+    function test_HandleOpsWithFailedOp() public {
+        SimpleAccount simpleAccount = createAccount();
+
+        bytes memory callData = abi.encodeWithSelector(
+            SimpleAccount.execute.selector, address(counter), 0, abi.encodeWithSignature("decrement()")
+        ); // call a non-existent function
+
+        uint256 nonce = simpleAccount.getNonce();
+
+        PackedUserOperation memory packedUserOp = utils.packUserOp(address(simpleAccount), nonce, callData);
+
+        bytes32 userOpHash = entryPoint.getUserOpHash(packedUserOp);
+
+        bytes memory signature = utils.signUserOp(ownerPrivateKey, userOpHash);
+
+        packedUserOp.signature = signature;
+
+        PackedUserOperation[] memory ops = new PackedUserOperation[](1);
+        ops[0] = packedUserOp;
+
+        uint256 counterBefore = counter.number();
+        uint256 accountBalanceBefore = address(simpleAccount).balance;
+        uint256 beneficiaryBalanceBefore = beneficiary.balance;
+
+        bool success = false;
+
+        vm.expectEmit(true, true, true, false);
+        emit UserOperationEvent(userOpHash, address(simpleAccount), address(0), nonce, success, 0, 0);
+
+        entryPoint.handleOps(ops, payable(beneficiary));
+
+        assertEq(counter.number(), counterBefore);
+        assertLt(address(simpleAccount).balance, accountBalanceBefore);
+        assertGt(beneficiary.balance, beneficiaryBalanceBefore);
+    }
+
     function test_HandleOpsWithExecuteBatch() public {
         SimpleAccount simpleAccount = createAccount();
 
