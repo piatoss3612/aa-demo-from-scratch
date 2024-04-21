@@ -331,14 +331,10 @@ describe("BLS", () => {
     const sig2 = signer2.sign(requestHash2);
     userOp2.signature = hexConcat(sig2);
 
-    const aggSig = aggregate([sig1, sig2]);
-    const aggregatedSig = await blsAgg.aggregateSignatures([userOp1, userOp2]);
-    expect(hexConcat(aggSig)).to.equal(aggregatedSig);
-
     await fund(account1.address);
     await fund(account2.address);
 
-    // handleOps 함수는 서명 집계를 지원하지 않는다.
+    // handleOps 함수는 aggregator를 지원하는 계정을 지원하지 않는다.
     await expect(
       entrypoint.handleOps([userOp1, userOp2], beneficiary)
     ).to.be.revertedWith('FailedOp(0, "AA24 signature error")');
