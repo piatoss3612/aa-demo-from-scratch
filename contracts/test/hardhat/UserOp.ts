@@ -52,6 +52,7 @@ export function packUserOp(userOp: UserOperation): PackedUserOperation {
     signature: userOp.signature,
   };
 }
+
 export function encodeUserOp(
   userOp: UserOperation,
   forSignature = true
@@ -107,6 +108,75 @@ export function encodeUserOp(
       ]
     );
   }
+}
+
+export async function fillUserOp(
+  op: Partial<UserOperation>,
+  entryPoint?: EntryPoint,
+  getNonceFunction = "getNonce"
+): Promise<UserOperation> {
+  const op1 = { ...op };
+  const provider = entryPoint?.provider;
+  if (op1.nonce == null) {
+    if (provider == null)
+      throw new Error("must have entryPoint to autofill nonce");
+    const c = new Contract(
+      op.sender!,
+      [`function ${getNonceFunction}() view returns(uint256)`],
+      provider
+    );
+    op1.nonce = await c[getNonceFunction]();
+  }
+  if (op1.callGasLimit == null && op.callData != null) {
+    if (provider == null)
+      throw new Error("must have entryPoint for callGasLimit estimate");
+    const gasEtimated = await provider.estimateGas({
+      from: entryPoint?.address,
+      to: op1.sender,
+      data: op1.callData,
+    });
+
+    // console.log('estim', op1.sender,'len=', op1.callData!.length, 'res=', gasEtimated)
+    // estimateGas assumes direct call from entryPoint. add wrapper cost.
+    op1.callGasLimit = gasEtimated; // .add(55000)
+  }
+  if (op1.paymaster != null) {
+    if (op1.paymasterVerificationGasLimit == null) {
+      op1.paymasterVerificationGasLimit =
+        DefaultsForUserOp.paymasterVerificationGasLimit;
+    }
+    if (op1.paymasterPostOpGasLimit == null) {
+      op1.paymasterPostOpGasLimit = DefaultsForUserOp.paymasterPostOpGasLimit;
+    }
+  }
+  if (op1.maxFeePerGas == null) {
+    if (provider == null)
+      throw new Error("must have entryPoint to autofill maxFeePerGas");
+    const block = await provider.getBlock("latest");
+    op1.maxFeePerGas = block.baseFeePerGas!.add(
+      op1.maxPriorityFeePerGas ?? DefaultsForUserOp.maxPriorityFeePerGas
+    );
+  }
+  // TODO: this is exactly what fillUserOp below should do - but it doesn't.
+  // adding this manually
+  if (op1.maxPriorityFeePerGas == null) {
+    op1.maxPriorityFeePerGas = DefaultsForUserOp.maxPriorityFeePerGas;
+  }
+  const op2 = fillUserOpDefaults(op1);
+  // eslint-disable-next-line @typescript-eslint/no-base-to-string
+  if (op2.preVerificationGas.toString() === "0") {
+    // TODO: we don't add overhead, which is ~21000 for a single TX, but much lower in a batch.
+    op2.preVerificationGas = callDataCost(encodeUserOp(op2, false));
+  }
+  return op2;
+}
+
+export async function fillAndPack(
+  op: Partial<UserOperation>,
+  entryPoint?: EntryPoint,
+  getNonceFunction = "getNonce"
+): Promise<PackedUserOperation> {
+  return packUserOp(await fillUserOp(op, entryPoint, getNonceFunction));
 }
 
 export function getUserOpHash(

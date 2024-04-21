@@ -28,7 +28,7 @@ import {
 import { BytesLike, Hexable } from "@ethersproject/bytes";
 import { expect } from "chai";
 import { UserOperation } from "./UserOperation";
-import { packUserOp, simulateValidation } from "./UserOp";
+import { packUserOp } from "./UserOp";
 
 export const AddressZero = ethers.constants.AddressZero;
 export const HashZero = ethers.constants.HashZero;

@@ -28,3 +28,9 @@ export interface PackedUserOperation {
   paymasterAndData: typ.bytes;
   signature: typ.bytes;
 }
+
+export interface UserOpsPerAggregator {
+  userOps: PackedUserOperation[];
+  aggregator: typ.address;
+  signature: typ.bytes;
+}
