@@ -1,0 +1,96 @@
+// Sources flattened with hardhat v2.17.3 https://hardhat.org
+
+// SPDX-License-Identifier: LGPL-3.0-only
+
+// File contracts/wallet/v2/AccountFactoryStorage.sol
+
+// Original license: SPDX_License_Identifier: LGPL-3.0-only
+pragma solidity ^0.8.12;
+
+contract AccountFactoryStorageBase {
+    address public implementation; // keep it the 1st slot
+    address public owner;     // keep it the 2nd slot
+    uint8   public initialized; // for initialize method.
+
+    event OwnershipTransferred(address indexed previousOwner, address indexed newOwner);
+    
+    modifier onlyOwner() {
+        require(msg.sender == owner, "OnlyOwner allowed");
+        _;
+    }
+    
+    function transferOwnership(address newOwner) public virtual onlyOwner {
+        require(newOwner != address(0), "Ownable: new owner is the zero address");
+        address oldOwner = owner;
+        owner = newOwner;
+        emit OwnershipTransferred(oldOwner, newOwner);
+    }
+}
+
+contract AccountFactoryStorage is AccountFactoryStorageBase {
+    // SmartAccount template => bool, save the 
+    mapping(address => bool) public safeSingleton;
+    // wallet address => bool,  save accounts created by this Factory.
+    // mapping(address => bool) public walletWhiteList;
+    
+
+    // NOTICE: add new storage variables below
+}
+
+
+// File contracts/wallet/v2/AccountFactoryProxy.sol
+
+// Original license: SPDX_License_Identifier: LGPL-3.0-only
+pragma solidity ^0.8.12;
+
+contract AccountFactoryProxy is AccountFactoryStorageBase {
+    
+    event ImplementationSet(address indexed oldImpl, address indexed newImpl);
+
+    constructor(address impl, address _owner, address walletTemplate) {
+        implementation = impl;
+        owner = _owner;
+
+        (bool success, bytes memory returnData) = implementation.delegatecall(
+            abi.encodeWithSignature("initialize(address)", 
+            walletTemplate
+        ));
+        require(success, string(returnData));
+    }
+
+    function setImplementation(address impl) external onlyOwner {
+        require(impl != address(0), "implementation is address 0");
+        address oldImpl = implementation;
+        implementation = impl;
+        emit ImplementationSet(oldImpl, impl);
+    }
+
+    receive() external payable {
+        revert("do not transfer to me");
+    }
+
+    /// @dev Fallback function forwards all transactions and returns all received return data.
+    fallback() external payable {
+        // solhint-disable-next-line no-inline-assembly
+        assembly {
+            let _singleton := and(
+                sload(0),
+                0xffffffffffffffffffffffffffffffffffffffff
+            )
+            calldatacopy(0, 0, calldatasize())
+            let success := delegatecall(
+                gas(),
+                _singleton,
+                0,
+                calldatasize(),
+                0,
+                0
+            )
+            returndatacopy(0, 0, returndatasize())
+            if eq(success, 0) {
+                revert(0, returndatasize())
+            }
+            return(0, returndatasize())
+        }
+    }
+}
